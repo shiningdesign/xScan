@@ -180,7 +180,12 @@ class ScannerWindow(QMainWindow):
             else ""
         )
         data = {
-            "sizeInfo": [geometry.x(), geometry.y(), geometry.width(), geometry.height()],
+            "sizeInfo": [
+                geometry.x(),
+                geometry.y(),
+                geometry.width(),
+                geometry.height(),
+            ],
             "rootFolder": self.folder_edit.text().strip(),
             "subfolder": self.subfolder_edit.text().strip(),
             "scannerDeviceId": selected,
@@ -235,8 +240,14 @@ class ScannerWindow(QMainWindow):
         if not folder_text:
             self.show_error("Choose a destination folder.")
             return
-        if not subfolder or INVALID_FILENAME_CHARS.search(subfolder) or subfolder in {".", ".."}:
-            self.show_error('The subfolder cannot be empty or contain < > : " / \\ | ? *.')
+        if (
+            not subfolder
+            or INVALID_FILENAME_CHARS.search(subfolder)
+            or subfolder in {".", ".."}
+        ):
+            self.show_error(
+                'The subfolder cannot be empty or contain < > : " / \\ | ? *.'
+            )
             return
 
         root_folder = Path(folder_text).expanduser()

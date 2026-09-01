@@ -4,6 +4,8 @@ A small Windows scanner application built with PySide6 and Windows Image
 Acquisition (WIA). It discovers installed WIA scanners and saves scans as JPEGs
 using a prefix and timestamp, for example `invoice_20260901_143025.jpg`.
 
+![xScan application screenshot](screenshots/xScan_2026-09-02.png)
+
 ## Why xScan?
 
 The default Windows scanning tool requires multiple clicks for every scan and
