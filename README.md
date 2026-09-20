@@ -27,10 +27,16 @@ For example, subfolder `invoice` saves to
 `<root>\invoice\invoice_20260901_143025.jpg`. Existing files are never
 overwritten.
 
+On opening xScan or changing the target folder, **Scans** starts from the number
+of JPG files already in that folder. It increases after each successful scan.
+**Reset count** starts it again at zero and remembers the reset between launches.
+**Open target folder** opens the selected root folder's subfolder in File
+Explorer, creating it if needed.
+
 ## Settings
 
-xScan remembers the last root folder, subfolder, selected scanner, and window
-position. Settings are stored under the home directory of whichever Windows
+xScan remembers the last root folder, subfolder, selected scanner, scan count,
+and window position. Settings are stored under the home directory of whichever Windows
 user runs the app:
 
 ```text

@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -111,6 +112,10 @@ class ScannerWindow(QMainWindow):
         super().__init__()
         self.scanners: list[Scanner] = []
         self.settings = self.load_settings()
+        self.scan_count = 0
+        self.count_offset = 0
+        self._count_folder: Path | None = None
+        self._initial_count = True
         self.setWindowTitle("xScan")
         self.setMinimumWidth(560)
         size_info = self.settings.get("sizeInfo")
@@ -128,6 +133,7 @@ class ScannerWindow(QMainWindow):
         self.folder_edit = QLineEdit(
             str(self.settings.get("rootFolder", Path.home() / "Pictures" / "Scans"))
         )
+        self.folder_edit.editingFinished.connect(self.refresh_count_from_folder)
         self.folder_button = QPushButton("Browse…")
         self.folder_button.clicked.connect(self.choose_folder)
         folder_row = QHBoxLayout()
@@ -136,6 +142,7 @@ class ScannerWindow(QMainWindow):
 
         self.subfolder_edit = QLineEdit(str(self.settings.get("subfolder", "scan")))
         self.subfolder_edit.setPlaceholderText("e.g. invoice")
+        self.subfolder_edit.editingFinished.connect(self.refresh_count_from_folder)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -148,6 +155,18 @@ class ScannerWindow(QMainWindow):
         self.scan_button.setMinimumHeight(38)
         self.scan_button.clicked.connect(self.start_scan)
 
+        self.count_label = QLabel(f"Scans: {self.scan_count}")
+        self.reset_button = QPushButton("Reset count")
+        self.reset_button.clicked.connect(self.reset_count)
+        self.open_folder_button = QPushButton("Open target folder")
+        self.open_folder_button.clicked.connect(self.open_target_folder)
+
+        actions_row = QHBoxLayout()
+        actions_row.addWidget(self.count_label)
+        actions_row.addWidget(self.reset_button)
+        actions_row.addStretch()
+        actions_row.addWidget(self.open_folder_button)
+
         self.status_label = QLabel("Ready")
         self.status_label.setWordWrap(True)
 
@@ -156,11 +175,13 @@ class ScannerWindow(QMainWindow):
         layout.setSpacing(14)
         layout.addLayout(form)
         layout.addWidget(self.scan_button)
+        layout.addLayout(actions_row)
         layout.addWidget(self.status_label)
 
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
+        self.refresh_count_from_folder()
         self.refresh_scanners()
 
     @staticmethod
@@ -189,6 +210,9 @@ class ScannerWindow(QMainWindow):
             "rootFolder": self.folder_edit.text().strip(),
             "subfolder": self.subfolder_edit.text().strip(),
             "scannerDeviceId": selected,
+            "scanCount": self.scan_count,
+            "scanCountOffset": self.count_offset,
+            "scanCountFolder": str(self._count_folder) if self._count_folder else "",
         }
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -207,6 +231,76 @@ class ScannerWindow(QMainWindow):
         )
         if chosen:
             self.folder_edit.setText(chosen)
+            self.refresh_count_from_folder()
+
+    @staticmethod
+    def count_jpg_files(folder: Path | None) -> int:
+        if folder is None:
+            return 0
+        try:
+            return sum(
+                entry.is_file() and entry.suffix.lower() == ".jpg"
+                for entry in folder.iterdir()
+            )
+        except OSError:
+            return 0
+
+    def refresh_count_from_folder(self) -> None:
+        folder = self.target_folder(show_errors=False)
+        if not self._initial_count and folder == self._count_folder:
+            return
+        saved_offset = self.settings.get("scanCountOffset", 0)
+        self.count_offset = (
+            saved_offset
+            if self._initial_count
+            and str(folder) == self.settings.get("scanCountFolder")
+            and isinstance(saved_offset, int)
+            and not isinstance(saved_offset, bool)
+            else 0
+        )
+        self.scan_count = max(0, self.count_jpg_files(folder) + self.count_offset)
+        self._count_folder = folder
+        self._initial_count = False
+        self.count_label.setText(f"Scans: {self.scan_count}")
+
+    def reset_count(self) -> None:
+        self.refresh_count_from_folder()
+        self.count_offset = -self.count_jpg_files(self._count_folder)
+        self.scan_count = 0
+        self.count_label.setText("Scans: 0")
+        self.save_settings()
+
+    def target_folder(self, show_errors: bool = True) -> Path | None:
+        subfolder = self.subfolder_edit.text().strip().rstrip(". ")
+        folder_text = self.folder_edit.text().strip()
+        if not folder_text:
+            if show_errors:
+                self.show_error("Choose a destination folder.")
+            return None
+        if (
+            not subfolder
+            or INVALID_FILENAME_CHARS.search(subfolder)
+            or subfolder in {".", ".."}
+        ):
+            if show_errors:
+                self.show_error(
+                    'The subfolder cannot be empty or contain < > : " / \\ | ? *.'
+                )
+            return None
+        return Path(folder_text).expanduser() / subfolder
+
+    def open_target_folder(self) -> None:
+        folder = self.target_folder()
+        if folder is None:
+            return
+        self.refresh_count_from_folder()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.show_error(f"Cannot use that folder:\n{exc}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve()))):
+            self.show_error(f"Could not open the target folder:\n{folder}")
 
     def refresh_scanners(self) -> None:
         self.scanner_combo.clear()
@@ -231,27 +325,15 @@ class ScannerWindow(QMainWindow):
 
     def start_scan(self) -> None:
         index = self.scanner_combo.currentIndex()
-        subfolder = self.subfolder_edit.text().strip().rstrip(". ")
-        folder_text = self.folder_edit.text().strip()
-
         if not (0 <= index < len(self.scanners)):
             self.show_error("Choose an available scanner.")
             return
-        if not folder_text:
-            self.show_error("Choose a destination folder.")
+        folder = self.target_folder()
+        if folder is None:
             return
-        if (
-            not subfolder
-            or INVALID_FILENAME_CHARS.search(subfolder)
-            or subfolder in {".", ".."}
-        ):
-            self.show_error(
-                'The subfolder cannot be empty or contain < > : " / \\ | ? *.'
-            )
-            return
+        self.refresh_count_from_folder()
 
-        root_folder = Path(folder_text).expanduser()
-        folder = root_folder / subfolder
+        subfolder = folder.name
         try:
             folder.mkdir(parents=True, exist_ok=True)
             destination = next_output_path(folder, subfolder)
@@ -268,6 +350,9 @@ class ScannerWindow(QMainWindow):
         except Exception as exc:
             self.show_error(f"Scanning failed:\n{exc}")
         else:
+            self.scan_count += 1
+            self.count_label.setText(f"Scans: {self.scan_count}")
+            self.save_settings()
             self.status_label.setText(f"Saved: {destination}")
             QMessageBox.information(self, "Scan complete", f"Saved to:\n{destination}")
         finally:
@@ -277,6 +362,8 @@ class ScannerWindow(QMainWindow):
         self.scan_button.setEnabled(not busy and bool(self.scanners))
         self.refresh_button.setEnabled(not busy)
         self.folder_button.setEnabled(not busy)
+        self.open_folder_button.setEnabled(not busy)
+        self.reset_button.setEnabled(not busy)
 
     def show_error(self, message: str) -> None:
         self.status_label.setText(message.replace("\n", " "))
